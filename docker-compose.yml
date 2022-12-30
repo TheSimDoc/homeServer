@@ -8,9 +8,9 @@ services:
     ports:
       - 8086:8086
     environment:
-      - INFLUXDB_DB=speedtest
-      - INFLUXDB_USER=influxdb
-      - INFLUXDB_USER_PASSWORD=spdtst
+      - INFLUXDB_DB=${INFLUXDB_DB}
+      - INFLUXDB_ADMIN_USER=${INFLUXDB_USERNAME}
+      - INFLUXDB_ADMIN_PASSWORD=${INFLUXDB_PASSWORD}
     volumes:
       - influxdb:/var/lib/influxdb
   
@@ -83,9 +83,9 @@ services:
     network_mode: 'bridge'
     restart: unless-stopped
     ports:
-      - "53:53/tcp"
-      - "53:53/udp"
-      - "67:67/udp"
+      - "93:53/tcp"
+      - "93:53/udp"
+      - "97:67/udp"
     expose:
       - 80
       - 443
