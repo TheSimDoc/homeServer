@@ -1,7 +1,7 @@
 FROM python:3
 
 # Add the python script
-ADD rpi-speedtest-cli.py /
+ADD homeserver-speedtest-cli.py /
 
 # Install required Python packages
 RUN pip install speedtest-cli
@@ -20,4 +20,4 @@ RUN env
 # in the container
 #WORKDIR /app
 #CMD [ "python", "./rpi-speedtest-cli.py" ]
-CMD ["python", "-u", "./rpi-speedtest-cli.py"]#, "-t ", $TEST_INTERVAL, "-c ", $WRITE_CSV, " -i ", $WRITE_INFLUXDB]
+CMD ["python", "-u", "./homeserver-speedtest-cli.py"]#, "-t ", $TEST_INTERVAL, "-c ", $WRITE_CSV, " -i ", $WRITE_INFLUXDB]
