@@ -3,7 +3,14 @@ import logging
 import re
 import subprocess
 import time
-from influxdb import InfluxDBClient
+
+from influxdb_client import InfluxDBClient
+from influxdb_client.client.exceptions import InfluxDBError
+from influxdb_client.client.write_api import SYNCHRONOUS
+from influxdb_client.rest import ApiException
+#from influxdb import InfluxDBClient
+#import influxdb_client
+
 
 def db_exists():
     '''returns True if the database exists'''
@@ -22,26 +29,26 @@ def wait_for_server(host, port, nretries=5):
             requests.get(url)
             return 
         except requests.exceptions.ConnectionError:
-            print('waiting for', url)
+            get_module_logger(__name__).info('waiting for', url)
             time.sleep(waiting_time)
             waiting_time *= 2
             pass
-    print('cannot connect to', url)
+    get_module_logger(__name__).info('cannot connect to', url)
     sys.exit(1)
 
 def connect_db(host, port, reset):
     '''connect to the database, and create it if it does not exist'''
     global client
-    print('connecting to database: {}:{}'.format(host,port))
+    get_module_logger(__name__).info('connecting to database: {}:{}'.format(host,port))
     client = InfluxDBClient(host, port, retries=5, timeout=1)
     wait_for_server(host, port)
     create = False
     if not db_exists():
         create = True
-        print('creating database...')
+        get_module_logger(__name__).info('creating database...')
         client.create_database(dbname)
     else:
-        print('database already exists')
+        get_module_logger(__name__).info('database already exists')
     client.switch_database(dbname)
     if not create and reset:
         client.delete_series(measurement=measurement)
@@ -93,28 +100,86 @@ def str2bool(v):
         return False
     else:
         raise argparse.ArgumentTypeError('Boolean value expected.')
-        
 
-__name__ = 'rpi-speedtest-cli'
+def check_connection():
+    """Check that the InfluxDB is running."""
+    get_module_logger(__name__).info("> Checking connection ...")
+    client.api_client.call_api('/ping', 'GET')
+    get_module_logger(__name__).info("ok")
+
+
+def check_query(bucket, org):
+    """Check that the credentials has permission to query from the Bucket"""
+    get_module_logger(__name__).info("> Checking credentials for query ...")
+    try:
+        client.query_api().query(f"from(bucket:\"{bucket}\") |> range(start: -1m) |> limit(n:1)", org)
+    except ApiException as e:
+        # missing credentials
+        if e.status == 404:
+            raise Exception(f"The specified token doesn't have sufficient credentials to read from '{bucket}' "
+                            f"or specified bucket doesn't exists.") from e
+        raise
+    get_module_logger(__name__).info("ok")
+
+
+def check_write(bucket, org):
+    """Check that the credentials has permission to write into the Bucket"""
+    get_module_logger(__name__).info("> Checking credentials for write ...")
+    try:
+        client.write_api(write_options=SYNCHRONOUS).write(bucket, org, b"")
+    except ApiException as e:
+        # bucket does not exist
+        if e.status == 404:
+            raise Exception(f"The specified bucket does not exist.") from e
+        # insufficient permissions
+        if e.status == 403:
+            raise Exception(f"The specified token does not have sufficient credentials to write to '{bucket}'.") from e
+        # 400 (BadRequest) caused by empty LineProtocol
+        if e.status != 400:
+            raise
+    get_module_logger(__name__).info("ok")
+
+class BatchingCallback(object):
+
+    def success(self, conf: (str, str, str), data: str):
+        """Successfully writen batch."""
+        get_module_logger(__name__).info("Written batch: {conf}, data: {data}")
+
+    def error(self, conf: (str, str, str), data: str, exception: InfluxDBError):
+        """Unsuccessfully writen batch."""
+        get_module_logger(__name__).info("Cannot write batch: {conf}, data: {data} due: {exception}")
+
+    def retry(self, conf: (str, str, str), data: str, exception: InfluxDBError):
+        """Retryable error."""
+        get_module_logger(__name__).info("Retryable error occurs for batch: {conf}, data: {data} retry: {exception}")
+
+callback = BatchingCallback()
+
+__name__ = 'homeserver-speedtest-cli'
 
 # Fetch environmental variables
 testinterval = int(os.environ.get('TEST_INTERVAL',10))
 writeCSV = str2bool(os.environ.get('WRITE_CSV',False))
 writeInfluxDB = str2bool(os.environ.get('WRITE_INFLUXDB',True))
+writeInfluxDB2 = str2bool(os.environ.get('WRITE_INFLUXDB2',True))
 influxDBhost = os.environ.get('INFLUXDB_HOST','localhost')
+influxDBorg = os.environ.get('INFLUXDB_ORG','mayr')
 influxDBport = int(os.environ.get('INFLUXDB_PORT',8086))
 influxDBdatabase = os.environ.get('INFLUXDB_DB','speedtest')
 influxDBusername = os.environ.get('INFLUXDB_USER','influxdb')
-influxDBpassword = os.environ.get('INFLUXDB_USER_PASSWORD','spdtst')
+influxDBpassword = os.environ.get('INFLUXDB_USER_PASSWORD','spdtstspdtstspdtst')
+influxDBtoken = os.environ.get('INFLUXDB_INIT_ADMIN_TOKEN','spdtstabcdefghxyz')
 
 get_module_logger(__name__).info("Set testinterval to %d seconds" % testinterval)
 get_module_logger(__name__).info("Set writeCSV to %s" % writeCSV)
 get_module_logger(__name__).info("Set writeInfluxDB to %s" % writeInfluxDB)
+get_module_logger(__name__).info("Set writeInfluxDB2 to %s" % writeInfluxDB2)
 get_module_logger(__name__).info("Set influxDB host to %s" % influxDBhost)
 get_module_logger(__name__).info("Set influxDB port to %d" % influxDBport)
 get_module_logger(__name__).info("Set influxDB database to %s" % influxDBdatabase)
 get_module_logger(__name__).info("Set influxDB username host to %s" % influxDBusername)
 get_module_logger(__name__).info("Set influxDB password port to %s" % influxDBpassword)
+get_module_logger(__name__).info("Set influxDB token to %s" % influxDBtoken)
 
 # conduct speedtest
 get_module_logger(__name__).info("conduct speedtest")
@@ -126,6 +191,9 @@ upload = re.findall('Upload:\s(.*?)\s', response, re.MULTILINE)
 ping = ping[0].replace(',', '.')
 download = download[0].replace(',', '.')
 upload = upload[0].replace(',', '.')
+
+get_module_logger(__name__).info('Ping: ' + str(ping) + ' ms, Download: ' + str(download) + ' Mbit/s Upload: '+ str(upload) + ' Mbit/s')
+get_module_logger(__name__).info('Waiting for ' + str(testinterval) + ' seconds')
 
 if writeCSV==True:
     get_module_logger(__name__).info('Write data to csv File')
@@ -139,7 +207,7 @@ if writeCSV==True:
     f.write('{},{},{},{},{}\r\n'.format(time.strftime('%m/%d/%y'), time.strftime('%H:%M'), ping, download, upload))
 
 if writeInfluxDB==True:
-    get_module_logger(__name__).info('create data for db')
+    get_module_logger(__name__).info('create data for influxdb')
     speed_data = [
         {
             "measurement" : "internet_speed",
@@ -158,6 +226,34 @@ if writeInfluxDB==True:
     get_module_logger(__name__).info('write data to influxDB')
     client.write_points(speed_data)
 
-get_module_logger(__name__).info('Ping: ' + str(ping) + ' ms, Download: ' + str(download) + ' Mbit/s Upload: '+ str(upload) + ' Mbit/s')
-get_module_logger(__name__).info('Waiting for ' + str(testinterval) + ' seconds')
+if writeInfluxDB2==True:
+    get_module_logger(__name__).info('create data for influxdb2')
+    speed_data = [
+        {
+            "measurement" : "internet_speed",
+            "tags" : {
+                "host": "speedtest"
+            },
+            "fields" : {
+                "download": float(download),
+                "upload": float(upload),
+                "ping": float(ping)
+            }
+        }
+    ]    
+    get_module_logger(__name__).info('connecting to influxDB2')
+    get_module_logger(__name__).info('URL: http://'+str(influxDBhost)+':'+str(influxDBport))
+    with InfluxDBClient(url='http://'+str(influxDBhost)+':'+str(influxDBport), token=influxDBtoken, org=influxDBorg) as client:
+        check_connection()
+        #check_query(influxDBdatabase,influxDBorg)
+        version = client.version()
+        get_module_logger(__name__).info('InfluxDB: '+ str(version))
+        check_write(influxDBdatabase,influxDBorg)
+        get_module_logger(__name__).info('Writing data to influxDB2')
+        with client.write_api(success_callback=callback.success,
+                          error_callback=callback.error,
+                          retry_callback=callback.retry) as write_api:
+            write_api.write(bucket=influxDBdatabase, record=speed_data)
+            get_module_logger(__name__).info('Writing data to influxDB2 finished')
+
 time.sleep(testinterval)

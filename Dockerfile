@@ -5,7 +5,8 @@ ADD homeserver-speedtest-cli.py /
 
 # Install required Python packages
 RUN pip install speedtest-cli
-RUN pip install influxdb
+#RUN pip install influxdb
+RUN pip install influxdb_client
 
 #ARG tst_int=60
 #ARG wrt_csv=False
